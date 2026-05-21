@@ -1,7 +1,10 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
-export default defineConfig({
+// Project pages are served from https://<user>.github.io/<repo>/, so production
+// assets must be prefixed with the repo name. Local dev stays at the root.
+export default defineConfig(({ mode }) => ({
+  base: mode === 'production' ? '/stock-dashboard/' : '/',
   plugins: [react()],
   server: {
     proxy: {
@@ -27,4 +30,4 @@ export default defineConfig({
       },
     },
   },
-})
+}))

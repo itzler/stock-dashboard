@@ -6,7 +6,9 @@
     "dev": "concurrently \"npm run dev:frontend\" \"npm run dev:server\"",
     "dev:frontend": "vite",
     "dev:server": "node server/index.js",
+    "build:data": "node scripts/build-data.js",
     "build": "vite build",
+    "build:site": "node scripts/build-data.js && vite build",
     "preview": "vite preview",
     "server": "node server/index.js",
     "refresh": "node server/scripts/refresh.js"
