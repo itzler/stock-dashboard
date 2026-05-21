@@ -43,8 +43,15 @@ jobs:
             libatspi2.0-0 || true
 
       - name: Install dependencies
-        # npm install (not ci) to tolerate lockfile metadata drift in the repo
+        # Skip Puppeteer's bundled Chromium download here so a download hiccup
+        # can't fail the whole build; we install the browser separately below.
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: 'true'
         run: npm install --no-audit --no-fund
+
+      - name: Install Chrome for Puppeteer (best-effort)
+        # Non-fatal: if this fails, the 3 Puppeteer scrapers just return no data.
+        run: npx puppeteer browsers install chrome || true
 
       - name: Generate static data (scrapers + SEC/Yahoo)
         run: node scripts/build-data.js
