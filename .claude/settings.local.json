@@ -1,0 +1,34 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:dev.to)",
+      "WebFetch(domain:www.alphavantage.co)",
+      "WebFetch(domain:finnhub.io)",
+      "Bash(npm run dev:*)",
+      "WebFetch(domain:www.macrotrends.net)",
+      "Bash(npm install:*)",
+      "Bash(pkill:*)",
+      "Bash(curl:*)",
+      "Bash(python3:*)",
+      "Bash(node -e:*)",
+      "Bash(jq:*)",
+      "Bash(source:*)",
+      "Bash(for ticker in RBLX CPNG HOOD COIN UBER RDDT)",
+      "Bash(do echo -n '$ticker: ')",
+      "Bash(done)",
+      "Bash(echo:*)",
+      "WebFetch(domain:www.sec.gov)",
+      "Bash(lsof:*)",
+      "Bash(find:*)",
+      "WebFetch(domain:api.llama.fi)",
+      "WebFetch(domain:api.coingecko.com)",
+      "WebFetch(domain:prestocks.com)",
+      "WebFetch(domain:romonitorstats.com)",
+      "WebFetch(domain:cryptopunks.app)",
+      "WebFetch(domain:blockworks.com)",
+      "Bash(git init:*)",
+      "Bash(git add:*)"
+    ]
+  }
+}
