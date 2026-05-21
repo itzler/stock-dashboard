@@ -85,9 +85,32 @@ const priceCache = {};
 // Finnhub API key
 const FINNHUB_API_KEY = import.meta.env.VITE_FINNHUB_API_KEY;
 
-// Fetch current stock price from Finnhub
+// In a static (GitHub Pages) build all data is pre-generated into /data; in dev
+// we hit the live proxies / scraper server.
+const STATIC_BUILD = import.meta.env.PROD;
+const DATA_BASE = import.meta.env.BASE_URL;
+
+// Lazily load the baked current-price map (static build only)
+let staticPricesPromise = null;
+const loadStaticPrices = () => {
+  if (!staticPricesPromise) {
+    staticPricesPromise = fetch(`${DATA_BASE}data/prices.json`)
+      .then(r => (r.ok ? r.json() : {}))
+      .catch(() => ({}));
+  }
+  return staticPricesPromise;
+};
+
+// Fetch current stock price (baked map in static build, Finnhub in dev)
 const fetchStockPrice = async (ticker) => {
-  if (priceCache[ticker]) return priceCache[ticker];
+  if (priceCache[ticker] !== undefined) return priceCache[ticker];
+
+  if (STATIC_BUILD) {
+    const prices = await loadStaticPrices();
+    const price = prices?.[ticker] ?? null;
+    priceCache[ticker] = price;
+    return price;
+  }
 
   try {
     const response = await fetch(
@@ -112,9 +135,10 @@ const fetchHistoricalPrices = async (ticker) => {
   if (historicalPriceCache[ticker]) return historicalPriceCache[ticker];
 
   try {
-    const response = await fetch(
-      `/yahoo-api/v8/finance/chart/${ticker}?interval=1mo&range=5y`
-    );
+    const url = STATIC_BUILD
+      ? `${DATA_BASE}data/yahoo/${ticker}.json`
+      : `/yahoo-api/v8/finance/chart/${ticker}?interval=1mo&range=5y`;
+    const response = await fetch(url);
     if (!response.ok) throw new Error('Historical price fetch failed');
     const data = await response.json();
     const result = data?.chart?.result?.[0];
@@ -412,10 +436,11 @@ const fetchTickerData = async (ticker, cik) => {
   if (dataCache[cacheKey]) return dataCache[cacheKey];
 
   try {
-    // Fetch from SEC EDGAR via Vite proxy (avoids CORS issues)
-    const response = await fetch(
-      `/sec-api/api/xbrl/companyfacts/CIK${cik}.json`
-    );
+    // Static build: read pre-fetched companyfacts. Dev: SEC EDGAR via Vite proxy.
+    const url = STATIC_BUILD
+      ? `${DATA_BASE}data/sec/CIK${cik}.json`
+      : `/sec-api/api/xbrl/companyfacts/CIK${cik}.json`;
+    const response = await fetch(url);
 
     if (!response.ok) {
       throw new Error(`Failed to fetch ${ticker}: ${response.status}`);
@@ -2090,7 +2115,7 @@ function PrestocksPricesGrid({ data }) {
 }
 
 // Generic Time Series Chart for metrics with date/value data
-function TimeSeriesChart({ data, title, subtitle, yAxisLabel, color, dataKey, formatValue }) {
+function TimeSeriesChart({ data, title, subtitle, yAxisLabel, color, dataKey, formatValue, chartType = 'line' }) {
   if (!data || !Array.isArray(data) || data.length === 0) {
     return (
       <div style={styles.altChartCard}>
@@ -2101,45 +2126,66 @@ function TimeSeriesChart({ data, title, subtitle, yAxisLabel, color, dataKey, fo
   }
 
   const formatter = formatValue || formatMetricNumber;
+  const key = dataKey || 'value';
+
+  const xAxis = (
+    <XAxis
+      dataKey="date"
+      tick={{ fontSize: 9, fill: '#999' }}
+      tickLine={false}
+      axisLine={{ stroke: '#e5e7eb' }}
+      tickFormatter={(val) => {
+        const d = new Date(val);
+        return `${d.getMonth() + 1}/${d.getFullYear().toString().slice(2)}`;
+      }}
+      interval="preserveStartEnd"
+      minTickGap={24}
+    />
+  );
+  const yAxis = (
+    <YAxis
+      tick={{ fontSize: 9, fill: '#999' }}
+      tickLine={false}
+      axisLine={false}
+      tickFormatter={formatter}
+      width={60}
+    />
+  );
+  const tooltip = (
+    <Tooltip
+      contentStyle={styles.tooltip}
+      formatter={(val) => [formatter(val), yAxisLabel || 'Value']}
+      labelFormatter={(label) => new Date(label).toLocaleDateString()}
+    />
+  );
 
   return (
     <div style={styles.altChartCard}>
       <h3 style={styles.altChartTitle}>{title}</h3>
       {subtitle && <p style={styles.altChartSubtitle}>{subtitle}</p>}
       <ResponsiveContainer width="100%" height={200}>
-        <LineChart data={data} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
-          <XAxis
-            dataKey="date"
-            tick={{ fontSize: 9, fill: '#999' }}
-            tickLine={false}
-            axisLine={{ stroke: '#e5e7eb' }}
-            tickFormatter={(val) => {
-              const d = new Date(val);
-              return `${d.getMonth() + 1}/${d.getFullYear().toString().slice(2)}`;
-            }}
-            interval="preserveStartEnd"
-          />
-          <YAxis
-            tick={{ fontSize: 9, fill: '#999' }}
-            tickLine={false}
-            axisLine={false}
-            tickFormatter={formatter}
-            width={60}
-          />
-          <Tooltip
-            contentStyle={styles.tooltip}
-            formatter={(val) => [formatter(val), yAxisLabel || 'Value']}
-            labelFormatter={(label) => new Date(label).toLocaleDateString()}
-          />
-          <Line
-            type="monotone"
-            dataKey={dataKey || 'value'}
-            stroke={color || '#6366f1'}
-            strokeWidth={2}
-            dot={false}
-            activeDot={{ r: 4 }}
-          />
-        </LineChart>
+        {chartType === 'bar' ? (
+          <BarChart data={data} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+            {xAxis}
+            {yAxis}
+            {tooltip}
+            <Bar dataKey={key} fill={color || '#6366f1'} radius={[2, 2, 0, 0]} />
+          </BarChart>
+        ) : (
+          <LineChart data={data} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+            {xAxis}
+            {yAxis}
+            {tooltip}
+            <Line
+              type="monotone"
+              dataKey={key}
+              stroke={color || '#6366f1'}
+              strokeWidth={2}
+              dot={false}
+              activeDot={{ r: 4 }}
+            />
+          </LineChart>
+        )}
       </ResponsiveContainer>
     </div>
   );
@@ -2251,10 +2297,13 @@ function AlternativeMetricsPage() {
   const [error, setError] = useState(null);
   const [lastUpdated, setLastUpdated] = useState(null);
 
+  // Static (GitHub Pages) build reads pre-generated data; dev hits the live server
+  const metricsUrl = STATIC_BUILD ? `${DATA_BASE}data/metrics.json` : '/api/metrics/all';
+
   useEffect(() => {
     const fetchMetrics = async () => {
       try {
-        const response = await fetch('/api/metrics/all');
+        const response = await fetch(metricsUrl);
         if (!response.ok) throw new Error('Failed to fetch metrics');
         const data = await response.json();
         setMetricsData(data);
@@ -2273,8 +2322,11 @@ function AlternativeMetricsPage() {
   const handleRefresh = async () => {
     setLoading(true);
     try {
-      await fetch('/api/refresh/all', { method: 'POST' });
-      const response = await fetch('/api/metrics/all');
+      // No scraper server in a static build - just re-read the baked data
+      if (!STATIC_BUILD) {
+        await fetch('/api/refresh/all', { method: 'POST' });
+      }
+      const response = await fetch(metricsUrl);
       const data = await response.json();
       setMetricsData(data);
       setLastUpdated(new Date());
@@ -2315,9 +2367,11 @@ function AlternativeMetricsPage() {
             {lastUpdated && ` • Last updated: ${lastUpdated.toLocaleTimeString()}`}
           </p>
         </div>
-        <button onClick={handleRefresh} style={styles.refreshButton} disabled={loading}>
-          {loading ? 'Refreshing...' : 'Refresh Data'}
-        </button>
+        {!STATIC_BUILD && (
+          <button onClick={handleRefresh} style={styles.refreshButton} disabled={loading}>
+            {loading ? 'Refreshing...' : 'Refresh Data'}
+          </button>
+        )}
       </div>
 
       {/* Prestocks Prices */}
@@ -2339,6 +2393,7 @@ function AlternativeMetricsPage() {
           yAxisLabel="Volume"
           color="#0ea5e9"
           dataKey="volume"
+          chartType="bar"
         />
 
         {/* Hyperliquid Revenue */}
@@ -2349,13 +2404,14 @@ function AlternativeMetricsPage() {
           yAxisLabel="Revenue"
           color="#10b981"
           dataKey="revenue"
+          chartType="bar"
         />
 
         {/* USDC Marketcap */}
         <TimeSeriesChart
           data={metricsData?.usdcMarketcap?.data}
           title="USDC TOTAL MARKETCAP"
-          subtitle="1 year market cap history"
+          subtitle="Market cap history since 2019"
           yAxisLabel="Market Cap"
           color="#6366f1"
           dataKey="marketcap"
@@ -2474,7 +2530,7 @@ export default function App() {
   }
 
   return (
-    <BrowserRouter>
+    <BrowserRouter basename={import.meta.env.BASE_URL.replace(/\/$/, '') || '/'}>
       <div style={styles.appContainer}>
         <TopTabNav activeTab={activeTab} setActiveTab={setActiveTab} />
         <div style={styles.container}>

@@ -1,0 +1,91 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches:
+      - master
+      - claude/fix-charts-data-display-sXHLX
+  schedule:
+    # Refresh the baked data every 6 hours (runs from the default branch only)
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+  issues: write
+  pull-requests: write
+
+# Allow one concurrent deployment; let a running one finish.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build (captured)
+        id: build
+        run: |
+          set -o pipefail
+          {
+            echo "=== versions ==="; node -v; npm -v
+            echo "=== apt deps (non-fatal) ==="
+            sudo apt-get update || true
+            sudo apt-get install -y \
+              libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
+              libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
+              libgbm1 libasound2 libasound2t64 libpango-1.0-0 \
+              libpangocairo-1.0-0 libcairo2 libatspi2.0-0 || true
+            echo "=== npm install ==="
+            PUPPETEER_SKIP_DOWNLOAD=true npm install --no-audit --no-fund --legacy-peer-deps
+            echo "=== puppeteer chrome (non-fatal) ==="
+            npx puppeteer browsers install chrome || true
+            echo "=== generate data (non-fatal) ==="
+            node scripts/build-data.js || true
+            echo "=== vite build ==="
+            npm run build
+            echo "=== spa fallback ==="
+            cp dist/index.html dist/404.html
+            echo "=== DONE ==="
+          } 2>&1 | tee /tmp/build.log
+
+      - name: Report failure to PR
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          LOG=$(tail -c 5000 /tmp/build.log 2>/dev/null || echo "(no build log - failed before the build step)")
+          BODY=$(printf 'Automated diagnostic: the Pages **build** job failed.\n\nTail of the build log:\n\n```\n%s\n```' "$LOG")
+          jq -n --arg b "$BODY" '{body: $b}' > /tmp/comment.json
+          curl -sS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/issues/1/comments" \
+            -d @/tmp/comment.json || true
+
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -3,11 +3,15 @@ import fetch from 'node-fetch';
 
 const COINGECKO_API = 'https://api.coingecko.com/api/v3';
 
+// Only keep data points from this date onward
+const USDC_START_DATE = '2019-01-01';
+
 export async function fetchUSDCMarketcap() {
   console.log('[CoinGecko] Fetching USDC marketcap...');
   try {
-    // Fetch 1 year of market cap data
-    const url = `${COINGECKO_API}/coins/usd-coin/market_chart?vs_currency=usd&days=365`;
+    // Fetch full available history; we filter down to USDC_START_DATE below.
+    // daily granularity is returned automatically for ranges > 90 days.
+    const url = `${COINGECKO_API}/coins/usd-coin/market_chart?vs_currency=usd&days=max`;
 
     const response = await fetch(url, {
       headers: {
@@ -25,12 +29,13 @@ export async function fetchUSDCMarketcap() {
     // Extract market_caps array - [timestamp_ms, marketcap]
     const marketCaps = json.market_caps || [];
 
-    // Sample to daily data (CoinGecko returns ~hourly for 365 days)
+    // Sample to daily data and filter to start date
     const dailyData = [];
     let lastDate = '';
 
     for (const [timestamp, marketcap] of marketCaps) {
       const date = new Date(timestamp).toISOString().split('T')[0];
+      if (date < USDC_START_DATE) continue;
       if (date !== lastDate) {
         dailyData.push({
           date: date,
@@ -41,7 +46,7 @@ export async function fetchUSDCMarketcap() {
       }
     }
 
-    console.log(`[CoinGecko] USDC: Found ${dailyData.length} days of marketcap data`);
+    console.log(`[CoinGecko] USDC: Found ${dailyData.length} days of marketcap data since ${USDC_START_DATE}`);
     return dailyData;
   } catch (error) {
     console.error('[CoinGecko] USDC fetch error:', error.message);

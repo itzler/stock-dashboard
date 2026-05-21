@@ -14,6 +14,9 @@ build/
 server/data/cache/*.json
 .cache/
 
+# Generated static data (built in CI before vite build)
+public/data/
+
 # Logs
 *.log
 npm-debug.log*

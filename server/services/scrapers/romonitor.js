@@ -37,37 +37,48 @@ export async function fetchRobloxCCU() {
 
     // Try to find CCU data - look for charts or stats
     const data = await page.evaluate(() => {
+      const bodyText = document.body.innerText || '';
+
+      // Normalize a matched figure into an absolute user count.
+      // Handles "5.2 million", "5.2M", and "5,234,123".
+      const normalize = (numStr, suffix) => {
+        const n = parseFloat(numStr.replace(/,/g, ''));
+        if (isNaN(n)) return null;
+        const s = (suffix || '').toLowerCase();
+        if (s.startsWith('m')) return n * 1e6; // million / M
+        if (s.startsWith('k')) return n * 1e3;
+        return n;
+      };
+
       const results = [];
-
-      // Look for any chart data in the page
-      // Common patterns: canvas elements, SVG charts, data attributes
-      const bodyText = document.body.innerText;
-
-      // Extract any numbers that look like CCU (millions of users)
-      const ccuPattern = /(\d+(?:,\d+)*(?:\.\d+)?)\s*(?:million|M|concurrent|players|users)/gi;
+      // Prefer figures explicitly tied to concurrent users / players online
+      const ccuPattern = /(\d+(?:,\d+)*(?:\.\d+)?)\s*(million|thousand|m|k)?\s*(?:concurrent|players|users|online)/gi;
       let match;
       while ((match = ccuPattern.exec(bodyText)) !== null) {
-        results.push({
-          value: match[1].replace(/,/g, ''),
-          context: bodyText.substring(Math.max(0, match.index - 50), match.index + 100),
-        });
-      }
-
-      // Also try to find chart data objects
-      const scripts = document.querySelectorAll('script');
-      for (const script of scripts) {
-        const content = script.textContent || '';
-        if (content.includes('chart') || content.includes('data')) {
-          // Look for array-like data structures
-          const dataMatch = content.match(/data\s*:\s*\[([\d,.\s\[\]]+)\]/);
-          if (dataMatch) {
-            results.push({ chartData: dataMatch[1].substring(0, 500) });
-          }
+        const value = normalize(match[1], match[2]);
+        if (value && value >= 10000) {
+          results.push({
+            value,
+            context: bodyText.substring(Math.max(0, match.index - 50), match.index + 100),
+          });
         }
       }
 
+      // Fallback: any "<n> million" figure on the page
+      if (results.length === 0) {
+        const millionPattern = /(\d+(?:\.\d+)?)\s*(million|m)\b/gi;
+        let m2;
+        while ((m2 = millionPattern.exec(bodyText)) !== null) {
+          const value = normalize(m2[1], m2[2]);
+          if (value && value >= 100000) results.push({ value });
+        }
+      }
+
+      // The platform-wide CCU is the largest plausible figure on the page
+      const best = results.reduce((max, r) => (r.value > (max?.value || 0) ? r : max), null);
+
       return {
-        currentCCU: results[0]?.value || null,
+        currentCCU: best ? best.value : null,
         rawMatches: results.slice(0, 5),
         pageTitle: document.title,
       };
@@ -79,7 +90,7 @@ export async function fetchRobloxCCU() {
     // For historical data, we may need to intercept API calls or navigate to specific charts
     // Return what we found
     return {
-      currentCCU: data.currentCCU ? parseFloat(data.currentCCU) : null,
+      currentCCU: data.currentCCU || null,
       historical: [], // Would need more specific scraping for historical chart data
       rawData: data,
       timestamp: Date.now(),
