@@ -18,7 +18,15 @@ app.use(express.json());
 
 // ============== Helper Functions ==============
 
-async function getOrFetchData(cacheKey, fetchFn) {
+// Timeout wrapper for fetch functions
+function withTimeout(promise, ms, fallbackValue = null) {
+  return Promise.race([
+    promise,
+    new Promise((resolve) => setTimeout(() => resolve(fallbackValue), ms))
+  ]);
+}
+
+async function getOrFetchData(cacheKey, fetchFn, timeout = 10000) {
   // Check if cache is valid
   if (isCacheValid(cacheKey)) {
     const cached = readCache(cacheKey);
@@ -125,9 +133,11 @@ app.get('/api/metrics/prestocks-volume', async (req, res) => {
   }
 });
 
-// Fetch all metrics at once
+// Fetch all metrics at once (with fast timeouts for non-critical scrapers)
 app.get('/api/metrics/all', async (req, res) => {
   try {
+    // Fast API-based fetches (5 second timeout)
+    // Slow Puppeteer-based fetches get 3 second timeout - will use cache if available
     const [
       prestocksPrices,
       robloxCCU,
@@ -137,13 +147,13 @@ app.get('/api/metrics/all', async (req, res) => {
       cryptopunksPrice,
       prestocksVolume,
     ] = await Promise.allSettled([
-      getOrFetchData('prestocks-prices', fetchPrestocksPrices),
-      getOrFetchData('roblox-ccu', fetchRobloxCCU),
-      getOrFetchData('kalshi-volume', fetchKalshiVolume),
-      getOrFetchData('hyperliquid-revenue', fetchHyperliquidRevenue),
-      getOrFetchData('usdc-marketcap', fetchUSDCMarketcap),
-      getOrFetchData('cryptopunks-price', fetchCryptopunksPrice),
-      getOrFetchData('prestocks-volume', fetchPrestocksVolume),
+      withTimeout(getOrFetchData('prestocks-prices', fetchPrestocksPrices), 5000, { data: null, error: 'timeout' }),
+      withTimeout(getOrFetchData('roblox-ccu', fetchRobloxCCU), 3000, { data: null, error: 'timeout' }),
+      withTimeout(getOrFetchData('kalshi-volume', fetchKalshiVolume), 5000, { data: null, error: 'timeout' }),
+      withTimeout(getOrFetchData('hyperliquid-revenue', fetchHyperliquidRevenue), 5000, { data: null, error: 'timeout' }),
+      withTimeout(getOrFetchData('usdc-marketcap', fetchUSDCMarketcap), 5000, { data: null, error: 'timeout' }),
+      withTimeout(getOrFetchData('cryptopunks-price', fetchCryptopunksPrice), 5000, { data: null, error: 'timeout' }),
+      withTimeout(getOrFetchData('prestocks-volume', fetchPrestocksVolume), 3000, { data: null, error: 'timeout' }),
     ]);
 
     res.json({
