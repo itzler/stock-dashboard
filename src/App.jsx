@@ -2090,7 +2090,7 @@ function PrestocksPricesGrid({ data }) {
 }
 
 // Generic Time Series Chart for metrics with date/value data
-function TimeSeriesChart({ data, title, subtitle, yAxisLabel, color, dataKey, formatValue }) {
+function TimeSeriesChart({ data, title, subtitle, yAxisLabel, color, dataKey, formatValue, chartType = 'line' }) {
   if (!data || !Array.isArray(data) || data.length === 0) {
     return (
       <div style={styles.altChartCard}>
@@ -2101,45 +2101,66 @@ function TimeSeriesChart({ data, title, subtitle, yAxisLabel, color, dataKey, fo
   }
 
   const formatter = formatValue || formatMetricNumber;
+  const key = dataKey || 'value';
+
+  const xAxis = (
+    <XAxis
+      dataKey="date"
+      tick={{ fontSize: 9, fill: '#999' }}
+      tickLine={false}
+      axisLine={{ stroke: '#e5e7eb' }}
+      tickFormatter={(val) => {
+        const d = new Date(val);
+        return `${d.getMonth() + 1}/${d.getFullYear().toString().slice(2)}`;
+      }}
+      interval="preserveStartEnd"
+      minTickGap={24}
+    />
+  );
+  const yAxis = (
+    <YAxis
+      tick={{ fontSize: 9, fill: '#999' }}
+      tickLine={false}
+      axisLine={false}
+      tickFormatter={formatter}
+      width={60}
+    />
+  );
+  const tooltip = (
+    <Tooltip
+      contentStyle={styles.tooltip}
+      formatter={(val) => [formatter(val), yAxisLabel || 'Value']}
+      labelFormatter={(label) => new Date(label).toLocaleDateString()}
+    />
+  );
 
   return (
     <div style={styles.altChartCard}>
       <h3 style={styles.altChartTitle}>{title}</h3>
       {subtitle && <p style={styles.altChartSubtitle}>{subtitle}</p>}
       <ResponsiveContainer width="100%" height={200}>
-        <LineChart data={data} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
-          <XAxis
-            dataKey="date"
-            tick={{ fontSize: 9, fill: '#999' }}
-            tickLine={false}
-            axisLine={{ stroke: '#e5e7eb' }}
-            tickFormatter={(val) => {
-              const d = new Date(val);
-              return `${d.getMonth() + 1}/${d.getFullYear().toString().slice(2)}`;
-            }}
-            interval="preserveStartEnd"
-          />
-          <YAxis
-            tick={{ fontSize: 9, fill: '#999' }}
-            tickLine={false}
-            axisLine={false}
-            tickFormatter={formatter}
-            width={60}
-          />
-          <Tooltip
-            contentStyle={styles.tooltip}
-            formatter={(val) => [formatter(val), yAxisLabel || 'Value']}
-            labelFormatter={(label) => new Date(label).toLocaleDateString()}
-          />
-          <Line
-            type="monotone"
-            dataKey={dataKey || 'value'}
-            stroke={color || '#6366f1'}
-            strokeWidth={2}
-            dot={false}
-            activeDot={{ r: 4 }}
-          />
-        </LineChart>
+        {chartType === 'bar' ? (
+          <BarChart data={data} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+            {xAxis}
+            {yAxis}
+            {tooltip}
+            <Bar dataKey={key} fill={color || '#6366f1'} radius={[2, 2, 0, 0]} />
+          </BarChart>
+        ) : (
+          <LineChart data={data} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+            {xAxis}
+            {yAxis}
+            {tooltip}
+            <Line
+              type="monotone"
+              dataKey={key}
+              stroke={color || '#6366f1'}
+              strokeWidth={2}
+              dot={false}
+              activeDot={{ r: 4 }}
+            />
+          </LineChart>
+        )}
       </ResponsiveContainer>
     </div>
   );
@@ -2339,6 +2360,7 @@ function AlternativeMetricsPage() {
           yAxisLabel="Volume"
           color="#0ea5e9"
           dataKey="volume"
+          chartType="bar"
         />
 
         {/* Hyperliquid Revenue */}
@@ -2349,13 +2371,14 @@ function AlternativeMetricsPage() {
           yAxisLabel="Revenue"
           color="#10b981"
           dataKey="revenue"
+          chartType="bar"
         />
 
         {/* USDC Marketcap */}
         <TimeSeriesChart
           data={metricsData?.usdcMarketcap?.data}
           title="USDC TOTAL MARKETCAP"
-          subtitle="1 year market cap history"
+          subtitle="Market cap history since 2019"
           yAxisLabel="Market Cap"
           color="#6366f1"
           dataKey="marketcap"

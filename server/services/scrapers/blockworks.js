@@ -1,9 +1,45 @@
-// Blockworks Analytics scraper for Prestocks volume by token
-// This is a JavaScript-rendered dashboard
+// Blockworks Analytics scraper for Prestocks spot volume by token
+// This is a JavaScript-rendered dashboard, so we render with Puppeteer and also
+// intercept any JSON API responses that carry per-token volume data.
 
 import puppeteer from 'puppeteer';
 
 const BLOCKWORKS_URL = 'https://blockworks.co/research';
+
+// Convert a money string like "$1.2M", "3,400,000", "$950K" into a number
+function parseMoney(str) {
+  if (str == null) return null;
+  if (typeof str === 'number') return isFinite(str) ? str : null;
+  const m = String(str).match(/\$?\s*([\d,]+(?:\.\d+)?)\s*(t|b|m|k)?/i);
+  if (!m) return null;
+  const num = parseFloat(m[1].replace(/,/g, ''));
+  if (isNaN(num)) return null;
+  const s = (m[2] || '').toLowerCase();
+  const mult = s === 't' ? 1e12 : s === 'b' ? 1e9 : s === 'm' ? 1e6 : s === 'k' ? 1e3 : 1;
+  return num * mult;
+}
+
+// Pull {token, volume} pairs out of an arbitrary intercepted JSON payload
+function extractVolumeFromJson(node, out, depth = 0) {
+  if (!node || depth > 6) return;
+  if (Array.isArray(node)) {
+    for (const item of node) extractVolumeFromJson(item, out, depth + 1);
+    return;
+  }
+  if (typeof node === 'object') {
+    const keys = Object.keys(node);
+    const tokenKey = keys.find(k => /^(token|symbol|name|asset|ticker)$/i.test(k));
+    const volKey = keys.find(k => /vol(ume)?/i.test(k));
+    if (tokenKey && volKey) {
+      const vol = parseMoney(node[volKey]);
+      const token = String(node[tokenKey]).trim();
+      if (token && vol != null && vol > 0) {
+        out.push({ token, volume: vol });
+      }
+    }
+    for (const k of keys) extractVolumeFromJson(node[k], out, depth + 1);
+  }
+}
 
 export async function fetchPrestocksVolume() {
   console.log('[Blockworks] Fetching Prestocks volume by token...');
@@ -21,99 +57,78 @@ export async function fetchPrestocksVolume() {
     });
 
     const page = await browser.newPage();
-
-    // Set viewport and user agent
     await page.setViewport({ width: 1920, height: 1080 });
     await page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
-    // Intercept network requests to capture API data
-    const apiData = [];
+    // Intercept JSON API responses that may carry per-token volume
+    const jsonPayloads = [];
     page.on('response', async (response) => {
       const url = response.url();
-      if (url.includes('api') || url.includes('data') || url.includes('analytics')) {
+      if (/api|data|analytics|volume|chart/i.test(url)) {
         try {
           const contentType = response.headers()['content-type'] || '';
           if (contentType.includes('json')) {
-            const json = await response.json();
-            apiData.push({ url, data: json });
+            jsonPayloads.push(await response.json());
           }
         } catch (e) {
-          // Ignore non-JSON responses
+          // Ignore non-JSON / unreadable responses
         }
       }
     });
 
-    // Navigate to the page
-    await page.goto(BLOCKWORKS_URL, {
-      waitUntil: 'networkidle2',
-      timeout: 30000,
-    });
-
-    // Wait for content to load
+    await page.goto(BLOCKWORKS_URL, { waitUntil: 'networkidle2', timeout: 30000 });
     await page.waitForSelector('body', { timeout: 10000 });
 
-    // Try to extract volume data from the page
-    const data = await page.evaluate(() => {
-      const results = [];
-
-      // Look for tables or lists with volume data
-      const tables = document.querySelectorAll('table');
-      for (const table of tables) {
-        const rows = table.querySelectorAll('tr');
-        for (const row of rows) {
-          const cells = row.querySelectorAll('td, th');
-          const rowData = Array.from(cells).map(c => c.textContent.trim());
-          if (rowData.some(d => d.includes('volume') || d.includes('$') || d.match(/\d+[MBK]/))) {
-            results.push(rowData);
-          }
-        }
-      }
-
-      // Look for card-like elements with token names and volumes
-      const cards = document.querySelectorAll('[class*="card"], [class*="token"], [class*="asset"]');
-      for (const card of cards) {
-        const text = card.textContent;
-        const volumeMatch = text.match(/\$?([\d,.]+)\s*[MBK]?/);
-        if (volumeMatch) {
-          results.push({
-            text: text.substring(0, 200),
-            volume: volumeMatch[0],
-          });
-        }
-      }
-
-      return {
-        tables: results.slice(0, 20),
-        pageTitle: document.title,
-      };
-    });
-
-    console.log(`[Blockworks] Page title: ${data.pageTitle}`);
-    console.log(`[Blockworks] Found ${data.tables.length} potential data rows`);
-    console.log(`[Blockworks] Intercepted ${apiData.length} API responses`);
-
-    // Process and return the data
-    const volumeByToken = [];
-
-    // Try to parse the captured data into structured format
-    for (const row of data.tables) {
-      if (Array.isArray(row) && row.length >= 2) {
-        volumeByToken.push({
-          token: row[0],
-          volume: row[1],
-        });
-      } else if (row.text && row.volume) {
-        volumeByToken.push({
-          token: row.text.split(/\s/)[0], // First word as token name
-          volume: row.volume,
-        });
-      }
+    // First choice: structured data from intercepted JSON
+    let volumeByToken = [];
+    for (const payload of jsonPayloads) {
+      extractVolumeFromJson(payload, volumeByToken);
     }
 
+    // Fallback: parse any table that looks like token + volume rows
+    if (volumeByToken.length === 0) {
+      const rows = await page.evaluate(() => {
+        const out = [];
+        for (const table of document.querySelectorAll('table')) {
+          for (const row of table.querySelectorAll('tr')) {
+            const cells = Array.from(row.querySelectorAll('td')).map(c => c.textContent.trim());
+            if (cells.length >= 2) out.push(cells);
+          }
+        }
+        return out;
+      });
+
+      for (const cells of rows) {
+        const token = cells[0];
+        // Find the first cell that parses as a dollar/volume figure
+        const volCell = cells.slice(1).find(c => /[\d.]/.test(c));
+        const volume = volCell ? volCell : null;
+        if (token && volume) {
+          volumeByToken.push({ token, volume });
+        }
+      }
+      // Normalize string volumes to numbers
+      volumeByToken = volumeByToken
+        .map(({ token, volume }) => ({ token, volume: parseMoney(volume) }))
+        .filter(v => v.volume != null && v.volume > 0);
+    }
+
+    // De-dupe by token (keep largest volume) and sort descending
+    const byToken = new Map();
+    for (const { token, volume } of volumeByToken) {
+      if (!byToken.has(token) || volume > byToken.get(token)) {
+        byToken.set(token, volume);
+      }
+    }
+    const result = Array.from(byToken.entries())
+      .map(([token, volume]) => ({ token, volume }))
+      .sort((a, b) => b.volume - a.volume)
+      .slice(0, 20);
+
+    console.log(`[Blockworks] Extracted ${result.length} token volume entries (${jsonPayloads.length} JSON payloads intercepted)`);
+
     return {
-      volumeByToken: volumeByToken.slice(0, 20),
-      apiData: apiData.slice(0, 5),
-      rawData: data,
+      volumeByToken: result,
       timestamp: Date.now(),
     };
   } catch (error) {
